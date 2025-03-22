@@ -90,6 +90,16 @@ print(f"Total Reviews Scraped: {len(review_df)}")
 # Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
+for page in range(1, 2):  # Just test 1 page for now
+    url = f"{base_url}page/{page}/"
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.content, 'html.parser')
+
+    # 🔎 Debug HTML output
+    print(f"🔎 Debugging HTML for {airline} Page {page}")
+    print(soup.prettify())
+    exit()  # Stops script after first fetch for inspection
+
 
 
 # In[ ]:
