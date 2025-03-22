@@ -1,15 +1,29 @@
-import random
-import time
+import subprocess
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
+import pandas as pd
+import pymysql
+from datetime import datetime
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-from datetime import datetime
-import pymysql
+from collections import Counter
+import time
+import random
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# NLTK downloads
+nltk.download('vader_lexicon')
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('averaged_perceptron_tagger')
 
 # Initialize NLP tools
 sia = SentimentIntensityAnalyzer()
@@ -25,42 +39,53 @@ airlines = {
     'Etihad Airways': 'https://www.airlinequality.com/airline-reviews/etihad-airways/'
 }
 
-# Setup Chrome options
+all_reviews = []
+keyword_list = []
+
+# ✅ Setup Chrome options
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--remote-debugging-port=9222")
+
+# ✅ Use system-installed Chrome
 driver = webdriver.Chrome(options=chrome_options)
 
-# Scrape reviews
-all_reviews = []
-keyword_list = []
+# Function to check network connectivity
+def check_network_connectivity(url):
+    try:
+        response = subprocess.run(['curl', '-Is', url], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if response.returncode == 0:
+            print(f"✅ Successfully connected to {url}")
+            return True
+        else:
+            print(f"❌ Failed to connect to {url}")
+            return False
+    except Exception as e:
+        print(f"❌ Error checking connectivity: {e}")
+        return False
 
-# NLTK downloads
-nltk.download('vader_lexicon')
-nltk.download('punkt')
-nltk.download('stopwords')
-nltk.download('wordnet')
-nltk.download('averaged_perceptron_tagger')
-
+# ✅ Scrape reviews from each airline
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # Scrape 3 pages
-        url = f"{base_url}page/{page}/"
-        retries = 3  # Retry logic
-        while retries > 0:
+    
+    if check_network_connectivity(base_url):
+        for page in range(1, 4):  # Scrape 3 pages
+            url = f"{base_url}page/{page}/"
             try:
                 driver.get(url)
-                time.sleep(random.randint(3, 6))  # Randomized delay to prevent bot detection
+                driver.set_page_load_timeout(60)  # Timeout for page load
+                WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))  # Wait for reviews to load
+                
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
+                print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
                 if not review_articles:
                     print(f"❌ No reviews found on page {page} for {airline}. Moving to next page.")
-                    break
 
-                print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
                 for review in review_articles:
                     content_div = review.find('div', class_='text_content')
                     content = content_div.get_text(strip=True) if content_div else 'No Content Found'
@@ -89,30 +114,25 @@ for airline, base_url in airlines.items():
                         'country': country,
                         'sentiment_score': sentiment['compound']
                     })
-                break  # Break out of retry loop if successful
+
             except Exception as e:
-                retries -= 1
-                print(f"❌ Error on page {page} for {airline}: {str(e)}")
-                if retries > 0:
-                    print("Retrying...")
-                    time.sleep(5 + random.randint(0, 5))  # Random delay before retry
-                else:
-                    print("Max retries reached, moving to next page.")
+                print(f"❌ Error on page {page} for {airline}: {e}")
+                time.sleep(5 + random.randint(0, 5))  # Random delay before retry
+    else:
+        print(f"❌ Skipping {airline} due to network issues.")
 
 driver.quit()
 
-# Convert to DataFrame
-import pandas as pd
+# ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
-print(f"Total Reviews Scraped: {len(review_df)}")
 print(review_df.head())
+print(f"Total Reviews Scraped: {len(review_df)}")
 
-# Keyword Frequency
-from collections import Counter
+# ✅ Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
-# Store into Amazon RDS MySQL
+# ✅ Store into Amazon RDS MySQL
 try:
     conn = pymysql.connect(
         host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
@@ -122,12 +142,15 @@ try:
     )
     cursor = conn.cursor()
 
-    for _, row in review_df.iterrows():
+    # Insert reviews into the database in batches
+    for i in range(0, len(review_df), 100):
+        batch = review_df.iloc[i:i + 100]  # Insert 100 records at a time
         sql = """
             INSERT INTO reviews (airline, review_date, country, sentiment_score, review_text, processed_text)
             VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(sql, (row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
+        for _, row in batch.iterrows():
+            cursor.execute(sql, (row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
 
     conn.commit()
     print("✅ Data successfully inserted into RDS")
