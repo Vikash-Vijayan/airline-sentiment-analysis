@@ -1,10 +1,6 @@
-import subprocess
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import pymysql
 from datetime import datetime
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
@@ -12,11 +8,7 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from collections import Counter
-import time
-import random
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import pymysql
 
 # NLTK downloads
 nltk.download('vader_lexicon')
@@ -42,61 +34,18 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-# ✅ Setup Chrome options
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--remote-debugging-port=9222")
+# Function to scrape reviews
+def scrape_reviews(url, airline):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
 
-# ✅ Use system-installed Chrome
-driver = webdriver.Chrome(options=chrome_options)
-
-# Function to check network connectivity
-def check_network_connectivity(url):
-    try:
-        response = subprocess.run(['curl', '-Is', url], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if response.returncode == 0:
-            print(f"✅ Successfully connected to {url}")
-            return True
-        else:
-            print(f"❌ Failed to connect to {url}")
-            return False
-    except Exception as e:
-        print(f"❌ Error checking connectivity: {e}")
-        return False
-
-# Retry decorator to handle retries for page loading
-def retry_on_failure(func):
-    def wrapper(*args, **kwargs):
-        retries = 5
-        delay = 5  # initial delay in seconds
-        for attempt in range(retries):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                print(f"❌ Error: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
-                delay *= 2  # Exponential backoff
-        print("❌ Max retries reached, skipping...")
-    return wrapper
-
-# ✅ Scrape reviews from each airline
-@retry_on_failure
-def scrape_reviews(url, page, airline):
-    driver.get(url)
-    driver.set_page_load_timeout(60)  # Timeout for page load
-    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))  # Wait for reviews to load
-    
-    soup = BeautifulSoup(driver.page_source, 'html.parser')
     review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
-    
+
     if not review_articles:
-        print(f"❌ No reviews found on page {page} for {airline}. Moving to next page.")
+        print(f"❌ No reviews found for {airline}.")
         return None
 
-    print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
+    print(f"✅ Found {len(review_articles)} reviews for {airline}")
     
     reviews = []
     for review in review_articles:
@@ -130,31 +79,26 @@ def scrape_reviews(url, page, airline):
 
     return reviews
 
-# ✅ Scraping reviews for each airline
+# Scraping reviews for each airline
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    
-    if check_network_connectivity(base_url):
-        for page in range(1, 4):  # Scrape 3 pages
-            url = f"{base_url}page/{page}/"
-            reviews = scrape_reviews(url, page, airline)
-            if reviews:
-                all_reviews.extend(reviews)
-    else:
-        print(f"❌ Skipping {airline} due to network issues.")
 
-driver.quit()
+    for page in range(1, 4):  # Scrape 3 pages
+        url = f"{base_url}page/{page}/"
+        reviews = scrape_reviews(url, airline)
+        if reviews:
+            all_reviews.extend(reviews)
 
-# ✅ Convert to DataFrame
+# Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
 print(f"Total Reviews Scraped: {len(review_df)}")
 
-# ✅ Keyword Frequency
+# Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
-# ✅ Store into Amazon RDS MySQL
+# Store into Amazon RDS MySQL
 try:
     conn = pymysql.connect(
         host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
