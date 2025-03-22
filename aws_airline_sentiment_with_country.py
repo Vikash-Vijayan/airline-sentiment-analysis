@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -16,20 +10,19 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from collections import Counter
 
+# Download NLTK resources
 nltk.download('vader_lexicon')
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('averaged_perceptron_tagger')
 
-
-# In[ ]:
-
-
+# Initialize NLP tools
 sia = SentimentIntensityAnalyzer()
 lemmatizer = WordNetLemmatizer()
 stop_words = set(stopwords.words('english'))
 
+# Airline URLs
 airlines = {
     'Air India': 'https://www.airlinequality.com/airline-reviews/air-india/',
     'British Airways': 'https://www.airlinequality.com/airline-reviews/british-airways/',
@@ -47,32 +40,31 @@ headers = {
 
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # Scrape first 3 pages
+    for page in range(1, 4):  # First 3 pages of each airline
         url = f"{base_url}page/{page}/"
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # ✅ Correct selector based on your HTML dump
+        # ✅ Corrected selector based on the website's HTML dump
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
         for review in review_articles:
-            # ✅ Extract review text
             content_div = review.find('div', class_='text_content')
             if not content_div:
                 continue
             content = content_div.get_text(strip=True)
 
-            # ✅ Extract country if available
+            # Extract country from the header if available
             country_tag = review.find('h3', class_='text_sub_header')
             country = country_tag.get_text(strip=True).split('(')[-1].replace(')', '') if country_tag else 'Unknown'
 
-            # ✅ NLP Preprocessing
+            # NLP Preprocessing
             tokens = word_tokenize(content.lower())
             tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
             pos_tags = nltk.pos_tag(tokens)
 
-            # ✅ Collect nouns/adjectives as keywords
+            # Collect nouns/adjectives as keywords
             keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
             keyword_list.extend(keywords)
 
@@ -87,27 +79,21 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
-# ✅ Convert to DataFrame
+# Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
 print(f"Total Reviews Scraped: {len(review_df)}")
 
-# ✅ Keyword Frequency
+# Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
-
-
-
-# In[ ]:
-
-
-# Store into Amazon RDS (replace with your actual RDS details)
+# ✅ Optional - Store into Amazon RDS MySQL (replace with your real RDS details)
 try:
     conn = pymysql.connect(
-        host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
+        host='your-rds-endpoint.rds.amazonaws.com',
         user='admin',
-        password='airline123',
+        password='YourStrongPassword',
         database='airline_reviews'
     )
     cursor = conn.cursor()
@@ -123,8 +109,8 @@ try:
     print("✅ Data successfully inserted into RDS")
 
 except Exception as e:
-    print("❌ Error:", e)
+    print("❌ Error while inserting into RDS:", e)
 
 finally:
-    conn.close()
-
+    if 'conn' in locals():
+        conn.close()
