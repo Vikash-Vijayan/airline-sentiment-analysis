@@ -1,141 +1,96 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import pymysql
-from datetime import datetime
 import nltk
-from nltk.sentiment import SentimentIntensityAnalyzer
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from collections import Counter
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import time
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import random
+import logging
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from requests.exceptions import RequestException
 
-# NLTK downloads
+# Setup NLTK resources
 nltk.download('vader_lexicon')
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('averaged_perceptron_tagger')
 
-# Initialize NLP tools
-sia = SentimentIntensityAnalyzer()
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english'))
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
-# Airline URLs
-airlines = {
-    'Air India': 'https://www.airlinequality.com/airline-reviews/air-india/',
-    'British Airways': 'https://www.airlinequality.com/airline-reviews/british-airways/',
-    'Qatar Airways': 'https://www.airlinequality.com/airline-reviews/qatar-airways/',
-    'Emirates': 'https://www.airlinequality.com/airline-reviews/emirates/',
-    'Etihad Airways': 'https://www.airlinequality.com/airline-reviews/etihad-airways/'
-}
-
-all_reviews = []
-keyword_list = []
-
-# ✅ Setup Chrome options
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-
-# ✅ Use system-installed Chrome
-driver = webdriver.Chrome(options=chrome_options)
-
-for airline, base_url in airlines.items():
-    print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # Scrape 3 pages
-        url = f"{base_url}page/{page}/"
-        driver.get(url)
+# Function to scrape reviews
+def scrape_reviews(airline, num_pages=5):
+    reviews = []
+    
+    for page in range(1, num_pages + 1):
+        url = f"https://www.airlinequality.com/airline-reviews/{airline}/page/{page}/"
         
-        # Increase sleep time if necessary for slow pages
-        time.sleep(5)
-
         try:
-            # Wait for the review section to load
-            WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))
-        except Exception as e:
-            print(f"❌ Timeout or error while loading reviews for {airline} on page {page}: {e}")
-            print(driver.page_source)  # Print the page source to debug
-            continue  # Skip to the next page if this one fails
+            # Send request and get the page content
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            
+            # Parse the page content
+            soup = BeautifulSoup(response.content, 'html.parser')
+            review_elements = soup.find_all('div', class_='text_content')
+            
+            # Extract reviews
+            for review in review_elements:
+                review_text = review.get_text(strip=True)
+                reviews.append(review_text)
+        
+        except RequestException as e:
+            logging.error(f"Error while scraping {airline} on page {page}: {e}")
+            time.sleep(2 + random.randint(0, 3))  # Backoff time for retry
 
-        # Print page source for debugging
-        print(driver.page_source)
+    logging.info(f"Scraped {len(reviews)} reviews for {airline}")
+    return reviews
 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
-        print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
+# Sentiment analysis function
+def analyze_sentiment(reviews):
+    sia = SentimentIntensityAnalyzer()
+    sentiment_scores = []
+    
+    for review in reviews:
+        score = sia.polarity_scores(review)
+        sentiment_scores.append(score['compound'])
+    
+    return sentiment_scores
 
-        for review in review_articles:
-            content_div = review.find('div', class_='text_content')
-            content = content_div.get_text(strip=True) if content_div else 'No Content Found'
+# Function to save data to AWS RDS (MySQL/PostgreSQL)
+def save_to_rds(airline, reviews, sentiment_scores, db_url):
+    # Create a DataFrame
+    df = pd.DataFrame({
+        'airline': [airline] * len(reviews),
+        'review': reviews,
+        'sentiment_score': sentiment_scores
+    })
+    
+    try:
+        # Create database connection
+        engine = create_engine(db_url)
+        
+        # Save the DataFrame to the database
+        df.to_sql('airline_reviews', con=engine, if_exists='append', index=False)
+        logging.info(f"Successfully saved {len(reviews)} reviews to RDS for {airline}")
+    
+    except SQLAlchemyError as e:
+        logging.error(f"Error saving data to RDS: {e}")
 
-            country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
-            country = 'Unknown'
-            if country_tag and '(' in country_tag.text:
-                country = country_tag.text.split('(')[-1].replace(')', '').strip()
+# Main function to run the scraping, sentiment analysis, and saving to database
+def main():
+    airline = "air-india"  # Change to desired airline
+    db_url = "mysql+pymysql://username:password@host/db_name"  # Replace with your RDS connection details
+    
+    reviews = scrape_reviews(airline, num_pages=5)
+    
+    if reviews:
+        sentiment_scores = analyze_sentiment(reviews)
+        save_to_rds(airline, reviews, sentiment_scores, db_url)
+    else:
+        logging.error(f"No reviews found for {airline}")
 
-            # NLP Preprocessing
-            tokens = word_tokenize(content.lower())
-            tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
-            pos_tags = nltk.pos_tag(tokens)
-
-            # Collect nouns/adjectives as keywords
-            keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
-            keyword_list.extend(keywords)
-
-            sentiment = sia.polarity_scores(content)
-
-            all_reviews.append({
-                'airline': airline,
-                'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
-                'review_text': content,
-                'processed_text': ' '.join(tokens),
-                'country': country,
-                'sentiment_score': sentiment['compound']
-            })
-
-driver.quit()
-
-# ✅ Convert to DataFrame
-review_df = pd.DataFrame(all_reviews)
-print(review_df.head())
-print(f"Total Reviews Scraped: {len(review_df)}")
-
-# ✅ Keyword Frequency
-keyword_counts = Counter(keyword_list)
-print("Top Keywords:", keyword_counts.most_common(10))
-
-# ✅ Store into Amazon RDS MySQL
-try:
-    conn = pymysql.connect(
-        host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
-        user='admin',
-        password='airline123',
-        database='airline_reviews'
-    )
-    cursor = conn.cursor()
-
-    for _, row in review_df.iterrows():
-        sql = """
-            INSERT INTO reviews (airline, review_date, country, sentiment_score, review_text, processed_text)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(sql, (row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
-
-    conn.commit()
-    print("✅ Data successfully inserted into RDS")
-
-except Exception as e:
-    print("❌ Error while inserting into RDS:", e)
-
-finally:
-    if 'conn' in locals():
-        conn.close()
+if __name__ == "__main__":
+    main()
