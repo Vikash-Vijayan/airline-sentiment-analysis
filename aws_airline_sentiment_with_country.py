@@ -45,19 +45,20 @@ for airline, base_url in airlines.items():
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # ✅ Corrected selector based on the website's HTML dump
+        # ✅ Updated correct selector based on actual HTML
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
         for review in review_articles:
+            # ✅ Extract review text correctly
             content_div = review.find('div', class_='text_content')
-            if not content_div:
-                continue
-            content = content_div.get_text(strip=True)
+            content = content_div.get_text(strip=True) if content_div else 'No Content Found'
 
-            # Extract country from the header if available
-            country_tag = review.find('h3', class_='text_sub_header')
-            country = country_tag.get_text(strip=True).split('(')[-1].replace(')', '') if country_tag else 'Unknown'
+            # ✅ Extract country information correctly
+            country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
+            country = 'Unknown'
+            if country_tag and '(' in country_tag.text:
+                country = country_tag.text.split('(')[-1].replace(')', '').strip()
 
             # NLP Preprocessing
             tokens = word_tokenize(content.lower())
@@ -79,12 +80,12 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
-# Convert to DataFrame
+# ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
 print(f"Total Reviews Scraped: {len(review_df)}")
 
-# Keyword Frequency
+# ✅ Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
