@@ -34,53 +34,60 @@ airlines = {
     'Air India': 'https://www.airlinequality.com/airline-reviews/air-india/',
     'British Airways': 'https://www.airlinequality.com/airline-reviews/british-airways/',
     'Qatar Airways': 'https://www.airlinequality.com/airline-reviews/qatar-airways/',
-    'Emirates': 'https://www.airlinequality.com/airline-reviews/emirates',
+    'Emirates': 'https://www.airlinequality.com/airline-reviews/emirates/',
     'Etihad Airways': 'https://www.airlinequality.com/airline-reviews/etihad-airways/'
 }
 
 all_reviews = []
 keyword_list = []
 
+headers = {'User-Agent': 'Mozilla/5.0'}
+
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    url = base_url + "page/1/"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
+    for page in range(1, 4):  # Scrape first 3 pages for each airline
+        url = f"{base_url}page/{page}/"
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.content, 'html.parser')
 
-    review_articles = soup.find_all('article', class_='comp comp_reviews-airline-review')
+        review_articles = soup.find_all('article', class_='comp comp_reviews-airline-review')
+        print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
-    for review in review_articles:
-        content = review.find('div', class_='text_content').get_text(strip=True) if review.find('div', class_='text_content') else ''
-        
-        # Extract country
-        country_tag = review.find('h3').find('span', class_='review-country') if review.find('h3') else None
-        country = country_tag.get_text(strip=True) if country_tag else 'Unknown'
-        
-        # NLP Preprocessing
-        tokens = word_tokenize(content.lower())
-        tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
-        pos_tags = nltk.pos_tag(tokens)
+        for review in review_articles:
+            content_div = review.find('div', class_='text_content')
+            if not content_div:
+                continue
+            content = content_div.get_text(strip=True)
 
-        # Collect nouns/adjectives as keywords
-        keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
-        keyword_list.extend(keywords)
+            country_tag = review.find('h3').find('span', class_='review-country') if review.find('h3') else None
+            country = country_tag.get_text(strip=True) if country_tag else 'Unknown'
 
-        sentiment = sia.polarity_scores(content)
+            # NLP Preprocessing
+            tokens = word_tokenize(content.lower())
+            tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
+            pos_tags = nltk.pos_tag(tokens)
 
-        all_reviews.append({
-            'airline': airline,
-            'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
-            'review_text': content,
-            'processed_text': ' '.join(tokens),
-            'country': country,
-            'sentiment_score': sentiment['compound']
-        })
+            # Collect nouns/adjectives as keywords
+            keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
+            keyword_list.extend(keywords)
+
+            sentiment = sia.polarity_scores(content)
+
+            all_reviews.append({
+                'airline': airline,
+                'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
+                'review_text': content,
+                'processed_text': ' '.join(tokens),
+                'country': country,
+                'sentiment_score': sentiment['compound']
+            })
 
 # Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
+print(f"Total Reviews Scraped: {len(review_df)}")
 
-# Keyword Frequency Analysis
+# Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
