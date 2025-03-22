@@ -1,4 +1,6 @@
-import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 import pandas as pd
 import pymysql
@@ -9,8 +11,9 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from collections import Counter
+import time
 
-# Download NLTK resources
+# NLTK downloads
 nltk.download('vader_lexicon')
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -34,38 +37,39 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
-}
+# ✅ Set Chrome Options
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+
+# ✅ Launch Chrome
+driver = webdriver.Chrome(options=chrome_options)
 
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # First 3 pages of each airline
+    for page in range(1, 4):  # Scrape 3 pages
         url = f"{base_url}page/{page}/"
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.content, 'html.parser')
+        driver.get(url)
+        time.sleep(5)  # Wait for JS to load
 
-        # ✅ Updated correct selector based on actual HTML
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
         for review in review_articles:
-            # ✅ Extract review text correctly
             content_div = review.find('div', class_='text_content')
             content = content_div.get_text(strip=True) if content_div else 'No Content Found'
 
-            # ✅ Extract country information correctly
             country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
             country = 'Unknown'
             if country_tag and '(' in country_tag.text:
                 country = country_tag.text.split('(')[-1].replace(')', '').strip()
 
-            # NLP Preprocessing
             tokens = word_tokenize(content.lower())
             tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
             pos_tags = nltk.pos_tag(tokens)
 
-            # Collect nouns/adjectives as keywords
             keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
             keyword_list.extend(keywords)
 
@@ -80,6 +84,8 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
+driver.quit()
+
 # ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
@@ -89,7 +95,7 @@ print(f"Total Reviews Scraped: {len(review_df)}")
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
-# ✅ Optional - Store into Amazon RDS MySQL (replace with your real RDS details)
+# ✅ Store into Amazon RDS MySQL
 try:
     conn = pymysql.connect(
         host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
