@@ -1,6 +1,4 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from requests_html import HTMLSession
 from bs4 import BeautifulSoup
 import pandas as pd
 import pymysql
@@ -11,7 +9,6 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from collections import Counter
-import time
 
 # NLTK downloads
 nltk.download('vader_lexicon')
@@ -37,23 +34,17 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-# ✅ Set Chrome Options
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-
-# ✅ Launch Chrome
-driver = webdriver.Chrome(options=chrome_options)
+session = HTMLSession()
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # Scrape 3 pages
+    for page in range(1, 4):  # First 3 pages of each airline
         url = f"{base_url}page/{page}/"
-        driver.get(url)
-        time.sleep(5)  # Wait for JS to load
+        r = session.get(url, headers=headers)
+        r.html.render(timeout=30, sleep=2)  # Render JS
 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        soup = BeautifulSoup(r.html.html, 'html.parser')
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
@@ -66,10 +57,12 @@ for airline, base_url in airlines.items():
             if country_tag and '(' in country_tag.text:
                 country = country_tag.text.split('(')[-1].replace(')', '').strip()
 
+            # NLP Preprocessing
             tokens = word_tokenize(content.lower())
             tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
             pos_tags = nltk.pos_tag(tokens)
 
+            # Collect nouns/adjectives as keywords
             keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
             keyword_list.extend(keywords)
 
@@ -84,7 +77,7 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
-driver.quit()
+session.close()
 
 # ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
