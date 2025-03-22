@@ -1,4 +1,6 @@
-from requests_html import HTMLSession
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 import pandas as pd
 import pymysql
@@ -9,6 +11,7 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from collections import Counter
+import time
 
 # NLTK downloads
 nltk.download('vader_lexicon')
@@ -34,17 +37,23 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-session = HTMLSession()
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+# ✅ Setup Chrome options
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+
+# ✅ Use system-installed Chrome
+driver = webdriver.Chrome(options=chrome_options)
 
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # First 3 pages of each airline
+    for page in range(1, 4):  # Scrape 3 pages
         url = f"{base_url}page/{page}/"
-        r = session.get(url, headers=headers)
-        r.html.render(timeout=30, sleep=2)  # Render JS
+        driver.get(url)
+        time.sleep(5)  # Wait for JS to load fully
 
-        soup = BeautifulSoup(r.html.html, 'html.parser')
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
@@ -77,7 +86,7 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
-session.close()
+driver.quit()
 
 # ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
