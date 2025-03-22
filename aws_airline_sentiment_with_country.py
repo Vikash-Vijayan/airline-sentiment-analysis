@@ -91,9 +91,9 @@ print("Top Keywords:", keyword_counts.most_common(10))
 # ✅ Optional - Store into Amazon RDS MySQL (replace with your real RDS details)
 try:
     conn = pymysql.connect(
-        host='your-rds-endpoint.rds.amazonaws.com',
+        host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
         user='admin',
-        password='YourStrongPassword',
+        password='airline123',
         database='airline_reviews'
     )
     cursor = conn.cursor()
