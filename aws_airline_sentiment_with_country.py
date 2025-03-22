@@ -1,6 +1,9 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import pandas as pd
 import pymysql
@@ -38,21 +41,25 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-# ✅ Setup Chrome options
+# Setup Chrome options
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 
-# ✅ Use system-installed Chrome
+# Use system-installed Chrome
 driver = webdriver.Chrome(options=chrome_options)
 
-for airline, base_url in airlines.items():
+def scrape_reviews(airline, base_url):
     print(f"Scraping reviews for {airline}...")
     for page in range(1, 4):  # Scrape 3 pages
         url = f"{base_url}page/{page}/"
         try:
             driver.get(url)
+            # Wait for the review articles to load, set a reasonable timeout for elements
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CLASS_NAME, "comp_media-review-rated"))
+            )
             time.sleep(random.randint(3, 6))  # Randomized delay to prevent bot detection
 
             soup = BeautifulSoup(driver.page_source, 'html.parser')
@@ -95,18 +102,21 @@ for airline, base_url in airlines.items():
             print(f"❌ Error on page {page} for {airline}: {e}")
             time.sleep(5 + random.randint(0, 5))  # Random delay before retry
 
+# Scrape reviews for each airline
+for airline, base_url in airlines.items():
+    scrape_reviews(airline, base_url)
+
 driver.quit()
 
-# ✅ Convert to DataFrame
+# Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
-print(review_df.head())
 print(f"Total Reviews Scraped: {len(review_df)}")
 
-# ✅ Keyword Frequency
+# Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
 
-# ✅ Store into Amazon RDS MySQL
+# Store into Amazon RDS MySQL
 try:
     conn = pymysql.connect(
         host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
