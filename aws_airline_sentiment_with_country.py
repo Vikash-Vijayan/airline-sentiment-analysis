@@ -67,57 +67,79 @@ def check_network_connectivity(url):
         print(f"❌ Error checking connectivity: {e}")
         return False
 
+# Retry decorator to handle retries for page loading
+def retry_on_failure(func):
+    def wrapper(*args, **kwargs):
+        retries = 5
+        delay = 5  # initial delay in seconds
+        for attempt in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                print(f"❌ Error: {e}. Retrying in {delay} seconds...")
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+        print("❌ Max retries reached, skipping...")
+    return wrapper
+
 # ✅ Scrape reviews from each airline
+@retry_on_failure
+def scrape_reviews(url, page, airline):
+    driver.get(url)
+    driver.set_page_load_timeout(60)  # Timeout for page load
+    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))  # Wait for reviews to load
+    
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
+    review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
+    
+    if not review_articles:
+        print(f"❌ No reviews found on page {page} for {airline}. Moving to next page.")
+        return None
+
+    print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
+    
+    reviews = []
+    for review in review_articles:
+        content_div = review.find('div', class_='text_content')
+        content = content_div.get_text(strip=True) if content_div else 'No Content Found'
+
+        country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
+        country = 'Unknown'
+        if country_tag and '(' in country_tag.text:
+            country = country_tag.text.split('(')[-1].replace(')', '').strip()
+
+        # NLP Preprocessing
+        tokens = word_tokenize(content.lower())
+        tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
+        pos_tags = nltk.pos_tag(tokens)
+
+        # Collect nouns/adjectives as keywords
+        keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
+        keyword_list.extend(keywords)
+
+        sentiment = sia.polarity_scores(content)
+
+        reviews.append({
+            'airline': airline,
+            'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
+            'review_text': content,
+            'processed_text': ' '.join(tokens),
+            'country': country,
+            'sentiment_score': sentiment['compound']
+        })
+
+    return reviews
+
+# ✅ Scraping reviews for each airline
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
     
     if check_network_connectivity(base_url):
         for page in range(1, 4):  # Scrape 3 pages
             url = f"{base_url}page/{page}/"
-            try:
-                driver.get(url)
-                driver.set_page_load_timeout(60)  # Timeout for page load
-                WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))  # Wait for reviews to load
-                
-                soup = BeautifulSoup(driver.page_source, 'html.parser')
-                review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
-                print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
-
-                if not review_articles:
-                    print(f"❌ No reviews found on page {page} for {airline}. Moving to next page.")
-
-                for review in review_articles:
-                    content_div = review.find('div', class_='text_content')
-                    content = content_div.get_text(strip=True) if content_div else 'No Content Found'
-
-                    country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
-                    country = 'Unknown'
-                    if country_tag and '(' in country_tag.text:
-                        country = country_tag.text.split('(')[-1].replace(')', '').strip()
-
-                    # NLP Preprocessing
-                    tokens = word_tokenize(content.lower())
-                    tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
-                    pos_tags = nltk.pos_tag(tokens)
-
-                    # Collect nouns/adjectives as keywords
-                    keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
-                    keyword_list.extend(keywords)
-
-                    sentiment = sia.polarity_scores(content)
-
-                    all_reviews.append({
-                        'airline': airline,
-                        'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
-                        'review_text': content,
-                        'processed_text': ' '.join(tokens),
-                        'country': country,
-                        'sentiment_score': sentiment['compound']
-                    })
-
-            except Exception as e:
-                print(f"❌ Error on page {page} for {airline}: {e}")
-                time.sleep(5 + random.randint(0, 5))  # Random delay before retry
+            reviews = scrape_reviews(url, page, airline)
+            if reviews:
+                all_reviews.extend(reviews)
     else:
         print(f"❌ Skipping {airline} due to network issues.")
 
