@@ -1,6 +1,9 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import pandas as pd
 import pymysql
@@ -51,7 +54,11 @@ for airline, base_url in airlines.items():
     for page in range(1, 4):  # Scrape 3 pages
         url = f"{base_url}page/{page}/"
         driver.get(url)
-        time.sleep(5)  # Wait for JS to load fully
+        
+        # Wait for the page content to load (adjust the selector as needed)
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'comp_media-review-rated')))
+        
+        time.sleep(2)  # Let the page load fully
 
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
@@ -63,8 +70,8 @@ for airline, base_url in airlines.items():
 
             country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
             country = 'Unknown'
-            if country_tag and '(' in country_tag.text:
-                country = country_tag.text.split('(')[-1].replace(')', '').strip()
+            if country_tag:
+                country = country_tag.text.strip()
 
             # NLP Preprocessing
             tokens = word_tokenize(content.lower())
@@ -107,13 +114,16 @@ try:
     )
     cursor = conn.cursor()
 
+    # Batch Insert
+    rows_to_insert = []
     for _, row in review_df.iterrows():
-        sql = """
-            INSERT INTO reviews (airline, review_date, country, sentiment_score, review_text, processed_text)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(sql, (row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
+        rows_to_insert.append((row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
 
+    sql = """
+        INSERT INTO reviews (airline, review_date, country, sentiment_score, review_text, processed_text)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    cursor.executemany(sql, rows_to_insert)
     conn.commit()
     print("✅ Data successfully inserted into RDS")
 
