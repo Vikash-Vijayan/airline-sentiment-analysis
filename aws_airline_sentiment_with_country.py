@@ -41,33 +41,38 @@ airlines = {
 all_reviews = []
 keyword_list = []
 
-headers = {'User-Agent': 'Mozilla/5.0'}
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+}
 
 for airline, base_url in airlines.items():
     print(f"Scraping reviews for {airline}...")
-    for page in range(1, 4):  # Scrape first 3 pages for each airline
+    for page in range(1, 4):  # Scrape first 3 pages
         url = f"{base_url}page/{page}/"
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        review_articles = soup.find_all('article', class_='comp comp_reviews-airline-review')
+        # ✅ Correct selector based on your HTML dump
+        review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
         print(f"✅ Found {len(review_articles)} reviews on page {page} for {airline}")
 
         for review in review_articles:
+            # ✅ Extract review text
             content_div = review.find('div', class_='text_content')
             if not content_div:
                 continue
             content = content_div.get_text(strip=True)
 
-            country_tag = review.find('h3').find('span', class_='review-country') if review.find('h3') else None
-            country = country_tag.get_text(strip=True) if country_tag else 'Unknown'
+            # ✅ Extract country if available
+            country_tag = review.find('h3', class_='text_sub_header')
+            country = country_tag.get_text(strip=True).split('(')[-1].replace(')', '') if country_tag else 'Unknown'
 
-            # NLP Preprocessing
+            # ✅ NLP Preprocessing
             tokens = word_tokenize(content.lower())
             tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
             pos_tags = nltk.pos_tag(tokens)
 
-            # Collect nouns/adjectives as keywords
+            # ✅ Collect nouns/adjectives as keywords
             keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
             keyword_list.extend(keywords)
 
@@ -82,23 +87,15 @@ for airline, base_url in airlines.items():
                 'sentiment_score': sentiment['compound']
             })
 
-# Convert to DataFrame
+# ✅ Convert to DataFrame
 review_df = pd.DataFrame(all_reviews)
 print(review_df.head())
 print(f"Total Reviews Scraped: {len(review_df)}")
 
-# Keyword Frequency
+# ✅ Keyword Frequency
 keyword_counts = Counter(keyword_list)
 print("Top Keywords:", keyword_counts.most_common(10))
-for page in range(1, 2):  # Just test 1 page for now
-    url = f"{base_url}page/{page}/"
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, 'html.parser')
 
-    # 🔎 Debug HTML output
-    print(f"🔎 Debugging HTML for {airline} Page {page}")
-    print(soup.prettify())
-    exit()  # Stops script after first fetch for inspection
 
 
 
