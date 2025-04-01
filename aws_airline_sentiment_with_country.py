@@ -1,28 +1,30 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from datetime import datetime
+import mysql.connector
+import re
+import time
 import nltk
-from nltk.sentiment import SentimentIntensityAnalyzer
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from collections import Counter
-import pymysql
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
-# NLTK downloads
 nltk.download('vader_lexicon')
-nltk.download('punkt')
-nltk.download('stopwords')
-nltk.download('wordnet')
-nltk.download('averaged_perceptron_tagger')
 
-# Initialize NLP tools
-sia = SentimentIntensityAnalyzer()
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english'))
+# ✅ Amazon RDS Database Configuration
+rds_host = 'database-2.c8xg22su41px.us-east-1.rds.amazonaws.com'
+rds_user = 'admin'
+rds_password = 'admin123'
+rds_database = 'airline_reviews'
 
-# Airline URLs
+# ✅ Establish RDS connection
+def rds_connection():
+    return mysql.connector.connect(
+        host=rds_host,
+        user=rds_user,
+        password=rds_password,
+        database=rds_database
+    )
+
+# ✅ Airline URLs
 airlines = {
     'Air India': 'https://www.airlinequality.com/airline-reviews/air-india/',
     'British Airways': 'https://www.airlinequality.com/airline-reviews/british-airways/',
@@ -31,99 +33,143 @@ airlines = {
     'Etihad Airways': 'https://www.airlinequality.com/airline-reviews/etihad-airways/'
 }
 
-all_reviews = []
-keyword_list = []
+# ✅ Scrape reviews function
+def scrape_airline_reviews(airline, url, pages=3):
+    reviews_list = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/122.0.0.0 Safari/537.36"
+    }
 
-# Function to scrape reviews
-def scrape_reviews(url, airline):
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
+    for page in range(1, pages + 1):
+        print(f"Scraping {airline} - Page {page}")
+        response = requests.get(f"{url}page/{page}/", headers=headers)
+        print(f"Status Code: {response.status_code}")
+        if response.status_code != 200:
+            print(f"❌ Failed to fetch {airline} - Page {page}")
+            continue
 
-    review_articles = soup.find_all('article', class_='comp comp_media-review-rated list-item media position-content')
+        soup = BeautifulSoup(response.text, "html5lib")
+        review_divs = soup.find_all("div", class_="text_content")
+        print(f"✅ Found {len(review_divs)} reviews on page {page}")
 
-    if not review_articles:
-        print(f"❌ No reviews found for {airline}.")
-        return None
+        h3_dates = soup.find_all('time')
+        h3_country = soup.find_all(class_="text_sub_header userStatusWrapper")
 
-    print(f"✅ Found {len(review_articles)} reviews for {airline}")
-    
-    reviews = []
-    for review in review_articles:
-        content_div = review.find('div', class_='text_content')
-        content = content_div.get_text(strip=True) if content_div else 'No Content Found'
+        country_list = []
+        for tag in h3_country:
+            text = tag.get_text()
+            country_match = re.search(r'\((.*?)\)', text)
+            country_list.append(country_match.group(1) if country_match else "Unknown")
 
-        country_tag = review.find('h3', class_='text_sub_header userStatusWrapper')
-        country = 'Unknown'
-        if country_tag and '(' in country_tag.text:
-            country = country_tag.text.split('(')[-1].replace(')', '').strip()
+        dates_list = [h3.text.strip() for h3 in h3_dates]
 
-        # NLP Preprocessing
-        tokens = word_tokenize(content.lower())
-        tokens = [lemmatizer.lemmatize(word) for word in tokens if word.isalpha() and word not in stop_words]
-        pos_tags = nltk.pos_tag(tokens)
+        for idx, div in enumerate(review_divs):
+            review_text = div.get_text(strip=True)
+            country_text = country_list[idx] if idx < len(country_list) else "Unknown"
+            date_text = dates_list[idx] if idx < len(dates_list) else "Unknown"
 
-        # Collect nouns/adjectives as keywords
-        keywords = [word for word, pos in pos_tags if pos in ('NN', 'NNS', 'JJ')]
-        keyword_list.extend(keywords)
+            reviews_list.append({
+                "Airline": airline,
+                "Review_Date": date_text,
+                "Review_Text": review_text,
+                "Country": country_text
+            })
+        time.sleep(1)
+    return reviews_list
 
-        sentiment = sia.polarity_scores(content)
+# ✅ Perform Sentiment Analysis + Add Rating
+def analyze_sentiment(df):
+    sid = SentimentIntensityAnalyzer()
+    sentiments = []
+    labels = []
+    ratings = []
 
-        reviews.append({
-            'airline': airline,
-            'review_date': datetime.utcnow().strftime('%Y-%m-%d'),
-            'review_text': content,
-            'processed_text': ' '.join(tokens),
-            'country': country,
-            'sentiment_score': sentiment['compound']
-        })
+    for text in df['Review_Text']:
+        sentiment_score = sid.polarity_scores(text)['compound']
+        sentiments.append(sentiment_score)
 
-    return reviews
+        if sentiment_score > 0.05:
+            label = 'Positive'
+            rating = 5
+        elif sentiment_score < -0.05:
+            label = 'Negative'
+            rating = 1
+        else:
+            label = 'Neutral'
+            rating = 3
 
-# Scraping reviews for each airline
-for airline, base_url in airlines.items():
-    print(f"Scraping reviews for {airline}...")
+        labels.append(label)
+        ratings.append(rating)
 
-    for page in range(1, 4):  # Scrape 3 pages
-        url = f"{base_url}page/{page}/"
-        reviews = scrape_reviews(url, airline)
-        if reviews:
-            all_reviews.extend(reviews)
+    df['Sentiment_Score'] = sentiments
+    df['Sentiment_Label'] = labels
+    df['Rating'] = ratings
+    return df
 
-# Convert to DataFrame
-review_df = pd.DataFrame(all_reviews)
-print(review_df.head())
-print(f"Total Reviews Scraped: {len(review_df)}")
-
-# Keyword Frequency
-keyword_counts = Counter(keyword_list)
-print("Top Keywords:", keyword_counts.most_common(10))
-
-# Store into Amazon RDS MySQL
-try:
-    conn = pymysql.connect(
-        host='airlinereview-db.c8xg22su41px.us-east-1.rds.amazonaws.com',
-        user='admin',
-        password='airline123',
-        database='airline_reviews'
-    )
+# ✅ Insert Data into RDS MySQL if NOT EXISTS
+def insert_to_rds(df):
+    conn = rds_connection()
     cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS airline_reviews (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            airline_name VARCHAR(255),
+            review_date VARCHAR(255),
+            review_text TEXT,
+            country VARCHAR(255),
+            sentiment_score FLOAT,
+            sentiment_label VARCHAR(50),
+            rating INT
+        )
+    ''')
 
-    # Insert reviews into the database in batches
-    for i in range(0, len(review_df), 100):
-        batch = review_df.iloc[i:i + 100]  # Insert 100 records at a time
-        sql = """
-            INSERT INTO reviews (airline, review_date, country, sentiment_score, review_text, processed_text)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        for _, row in batch.iterrows():
-            cursor.execute(sql, (row['airline'], row['review_date'], row['country'], row['sentiment_score'], row['review_text'], row['processed_text']))
+    inserted_count = 0
+
+    for _, row in df.iterrows():
+        # ✅ Check if this review already exists
+        cursor.execute('''
+            SELECT COUNT(*) FROM airline_reviews
+            WHERE airline_name = %s AND review_date = %s AND review_text = %s
+        ''', (row['Airline'], row['Review_Date'], row['Review_Text']))
+        result = cursor.fetchone()
+
+        if result[0] == 0:
+            # ✅ Insert new review with rating
+            cursor.execute('''
+                INSERT INTO airline_reviews 
+                (airline_name, review_date, review_text, country, sentiment_score, sentiment_label, rating)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (row['Airline'], row['Review_Date'], row['Review_Text'], row['Country'],
+                  row['Sentiment_Score'], row['Sentiment_Label'], row['Rating']))
+            inserted_count += 1
+        else:
+            print(f"⚠️ Duplicate found. Skipping review for {row['Airline']} on {row['Review_Date']}")
 
     conn.commit()
-    print("✅ Data successfully inserted into RDS")
+    print(f"✅ {inserted_count} new reviews inserted successfully.")
+    cursor.close()
+    conn.close()
 
-except Exception as e:
-    print("❌ Error while inserting into RDS:", e)
+if __name__ == "__main__":
+    all_reviews = []
+    for airline, url in airlines.items():
+        airline_reviews = scrape_airline_reviews(airline, url, pages=10)
+        all_reviews.extend(airline_reviews)
 
-finally:
-    if 'conn' in locals():
-        conn.close()
+    # ✅ Convert to DataFrame
+    df_reviews = pd.DataFrame(all_reviews)
+    print("✅ Reviews scraped. Performing sentiment analysis...")
+
+    if df_reviews.empty:
+        print("❌ No reviews scraped. Exiting...")
+        exit()
+
+    # ✅ Perform Sentiment Analysis + Add Rating
+    df_reviews = analyze_sentiment(df_reviews)
+    print(df_reviews.head())
+
+    # ✅ Insert into RDS only if not duplicate
+    insert_to_rds(df_reviews)
+    print("✅ Process completed. Data inserted without duplicates!")
